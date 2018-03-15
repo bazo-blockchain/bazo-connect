@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,12 +14,15 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"time"
 )
 
 var (
 	logger    *log.Logger
+	root      string
+	multisig  string
 	openAcc   = make(map[int][64]byte)
 	openFunds = make(map[int][64]byte)
 )
@@ -49,46 +50,20 @@ type carma_response struct {
 }
 
 func main() {
-	logger = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
+	if len(os.Args) != 3 {
+		log.Fatal("Usage bazo-connect <root> <multisig>")
+	}
 
-	go checkStatus()
-	go processNewAccRoutine()
-	processNewFundsRoutine()
-}
+	root = os.Args[1]
+	root = os.Args[2]
 
-func checkStatus() {
+	logger = storage.InitLogger()
+
 	for {
+		processNewAcc()
+		processNewFunds()
+
 		time.Sleep(10 * time.Second)
-
-		logger.Println("Status:")
-		fmt.Println("Open accounts (address):")
-		for _, address := range openAcc {
-			fmt.Printf("%x\n", address)
-		}
-
-		fmt.Println("Open funds (address):")
-		for _, address := range openFunds {
-			fmt.Printf("%x\n", address)
-		}
-	}
-}
-func processNewAccRoutine() {
-	for {
-		time.Sleep(30 * time.Second)
-
-		if err := processNewAcc(); err != nil {
-			logger.Printf("Processing new accounts failed: %v", err)
-		}
-	}
-}
-
-func processNewFundsRoutine() {
-	for {
-		time.Sleep(30 * time.Second)
-
-		if err := processNewFunds(); err != nil {
-			logger.Printf("Processing new funds failed: %v", err)
-		}
 	}
 }
 
@@ -104,19 +79,8 @@ func processNewAcc() (err error) {
 		}
 
 		if acc == nil {
-			txHash, err := createAccTx(address)
-			if err != nil {
-				return err
-			}
 
-			sig, err := signTx(txHash)
-			if err != nil {
-				return err
-			}
-
-			if err := sendTx(txHash, sig, "accTx"); err != nil {
-				return err
-			}
+			create(address)
 
 			setStatus(id, "pending")
 			delete(openAcc, id)
@@ -143,26 +107,10 @@ func processNewFunds() (err error) {
 				return err
 			}
 
-			txHash, err := createFundsTx(address, status.Amount)
-			if err != nil {
-				return err
-			}
-
-			sig, err := signTx(txHash)
-			if err != nil {
-				return err
-			}
-
-			err = sendTx(txHash, sig, "fundsTx")
-			if err != nil {
-				return err
-			}
+			fund(address, status.Amount)
 
 			setStatus(id, "processed")
 			delete(openFunds, id)
-		} else {
-			setStatus(id, "open")
-			openAcc[id] = address
 		}
 	}
 
@@ -194,6 +142,17 @@ func reqCarmaSummary(status string) (err error) {
 				}
 			}
 		}
+	}
+
+	logger.Println("Status:")
+	fmt.Println("Open accounts (address)")
+	for _, address := range openAcc {
+		fmt.Printf("%x\n", address)
+	}
+
+	fmt.Println("Open funds (address)")
+	for _, address := range openFunds {
+		fmt.Printf("%x\n", address)
 	}
 
 	return nil
@@ -255,97 +214,24 @@ func setStatus(id int, status string) error {
 	return nil
 }
 
-func createAccTx(address [64]byte) (txHash [32]byte, err error) {
-	pubKey, _, err := storage.ExtractKeyFromFile(os.Args[1])
-	issuer := storage.GetAddressFromPubKey(&pubKey)
-
-	var contents []REST.Content
-	jsonResponse := REST.JsonResponse{Content: contents}
-	jsonValue, _ := json.Marshal(jsonResponse)
-
-	response, err := http.Post("http://"+client.LIGHT_CLIENT_SERVER+"/createAccTx/"+hex.EncodeToString(address[:])+"/0/1/"+hex.EncodeToString(issuer[:]), "application/json", bytes.NewBuffer(jsonValue))
+func create(address [64]byte) {
+	out, err := exec.Command("bazo-client", "accTx", "0", "1", root, hex.EncodeToString(address[:])).Output()
 	if err != nil {
-		return txHash, errors.New(fmt.Sprintf("The HTTP request failed with error %s", err))
+		log.Fatal(err)
 	}
 
-	data, _ := ioutil.ReadAll(response.Body)
-
-	json.Unmarshal([]byte(data), &jsonResponse)
-
-	if jsonResponse.Code != 200 {
-		return txHash, errors.New(fmt.Sprintf("Could not create tx. Error code: %v", jsonResponse.Code))
-	}
-
-	txHashInt, _ := new(big.Int).SetString(jsonResponse.Content[0].Detail.(string), 16)
-	copy(txHash[:], txHashInt.Bytes())
-
-	return txHash, err
+	logger.Printf("%s", out)
 }
 
-func createFundsTx(address [64]byte, amount int) (txHash [32]byte, err error) {
-	pubKey, _, err := storage.ExtractKeyFromFile(os.Args[1])
-	issuer := storage.GetAddressFromPubKey(&pubKey)
+func fund(address [64]byte, amount int) {
+	pubKeyRoot, _, _ := storage.ExtractKeyFromFile(os.Args[1])
+	issuer := storage.GetAddressFromPubKey(&pubKeyRoot)
 	acc, _ := reqAccount(issuer)
 
-	var contents []REST.Content
-	jsonResponse := REST.JsonResponse{Content: contents}
-	jsonValue, _ := json.Marshal(jsonResponse)
-
-	response, err := http.Post("http://"+client.LIGHT_CLIENT_SERVER+"/createFundsTx/0/"+strconv.Itoa(amount)+"/1/"+fmt.Sprint(acc.TxCnt)+"/"+hex.EncodeToString(issuer[:])+"/"+hex.EncodeToString(address[:]), "application/json", bytes.NewBuffer(jsonValue))
+	out, err := exec.Command("bazo-client", "fundsTx", "0", strconv.Itoa(amount), "1", strconv.Itoa(int(acc.TxCnt)), root, hex.EncodeToString(address[:]), multisig).Output()
 	if err != nil {
-		return txHash, errors.New(fmt.Sprintf("The HTTP request failed with error %s", err))
+		log.Fatal(err)
 	}
 
-	data, _ := ioutil.ReadAll(response.Body)
-
-	json.Unmarshal([]byte(data), &jsonResponse)
-
-	if jsonResponse.Code != 200 {
-		return txHash, errors.New(fmt.Sprintf("Could not create tx. Error code: %v", jsonResponse.Code))
-	}
-
-	txHashInt, _ := new(big.Int).SetString(jsonResponse.Content[0].Detail.(string), 16)
-	copy(txHash[:], txHashInt.Bytes())
-
-	return txHash, err
-}
-
-func sendTx(txHash [32]byte, sig [64]byte, txType string) (err error) {
-	var response *http.Response
-	var jsonResponse REST.JsonResponse
-	jsonValue, _ := json.Marshal(jsonResponse)
-
-	if txType == "accTx" {
-		response, err = http.Post("http://"+client.LIGHT_CLIENT_SERVER+"/sendAccTx/"+hex.EncodeToString(txHash[:])+"/"+hex.EncodeToString(sig[:]), "application/json", bytes.NewBuffer(jsonValue))
-	} else if txType == "fundsTx" {
-		response, err = http.Post("http://"+client.LIGHT_CLIENT_SERVER+"/sendFundsTx/"+hex.EncodeToString(txHash[:])+"/"+hex.EncodeToString(sig[:]), "application/json", bytes.NewBuffer(jsonValue))
-
-	}
-	if err != nil {
-		return errors.New(fmt.Sprintf("The HTTP request failed with error %s", err))
-	}
-
-	data, _ := ioutil.ReadAll(response.Body)
-
-	json.Unmarshal([]byte(data), &jsonResponse)
-
-	if jsonResponse.Code != 200 {
-		return errors.New(fmt.Sprintf("Could not send tx. Error code: %v", jsonResponse.Code))
-	}
-
-	return nil
-}
-
-func signTx(txHash [32]byte) (sig [64]byte, err error) {
-	_, privKey, err := storage.ExtractKeyFromFile(os.Args[1])
-
-	r, s, err := ecdsa.Sign(rand.Reader, &privKey, txHash[:])
-	if err != nil {
-		return sig, errors.New(fmt.Sprintf("Could not sign tx: %v", err))
-	}
-
-	copy(sig[32-len(r.Bytes()):32], r.Bytes())
-	copy(sig[64-len(s.Bytes()):], s.Bytes())
-
-	return sig, err
+	logger.Printf("%s", out)
 }
