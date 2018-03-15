@@ -79,12 +79,11 @@ func processNewAcc() (err error) {
 		}
 
 		if acc == nil {
-
 			create(address)
-
-			setStatus(id, "pending")
-			delete(openAcc, id)
 		}
+ 
+		setStatus(id, "pending")
+		delete(openAcc, id)
 	}
 
 	return nil
@@ -108,7 +107,6 @@ func processNewFunds() (err error) {
 			}
 
 			fund(address, status.Amount)
-
 			setStatus(id, "processed")
 			delete(openFunds, id)
 		}
