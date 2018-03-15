@@ -55,7 +55,7 @@ func main() {
 	}
 
 	root = os.Args[1]
-	root = os.Args[2]
+	multisig = os.Args[2]
 
 	logger = storage.InitLogger()
 
