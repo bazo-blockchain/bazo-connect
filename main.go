@@ -67,7 +67,7 @@ func main() {
 		processNewAcc()
 		processNewFunds()
 
-		time.Sleep(10 * time.Second)
+		time.Sleep(2 * time.Minute)
 	}
 }
 
