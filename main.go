@@ -20,11 +20,12 @@ import (
 )
 
 var (
-	logger    *log.Logger
-	root      string
-	multisig  string
-	openAcc   = make(map[int][64]byte)
-	openFunds = make(map[int][64]byte)
+	logger        *log.Logger
+	issuer        string
+	issuerAddress [64]byte
+	multisig      string
+	openAcc       = make(map[int][64]byte)
+	openFunds     = make(map[int][64]byte)
 )
 
 const (
@@ -51,11 +52,14 @@ type carma_response struct {
 
 func main() {
 	if len(os.Args) != 3 {
-		log.Fatal("Usage bazo-connect <root> <multisig>")
+		log.Fatal("Usage bazo-connect <issuer> <multisig>")
 	}
 
-	root = os.Args[1]
+	issuer = os.Args[1]
 	multisig = os.Args[2]
+
+	issuerPubKey, _, _ := storage.ExtractKeyFromFile(issuer)
+	issuerAddress = storage.GetAddressFromPubKey(&issuerPubKey)
 
 	logger = storage.InitLogger()
 
@@ -81,7 +85,7 @@ func processNewAcc() (err error) {
 		if acc == nil {
 			create(address)
 		}
- 
+
 		setStatus(id, "pending")
 		delete(openAcc, id)
 	}
@@ -93,6 +97,8 @@ func processNewFunds() (err error) {
 	if err = reqCarmaSummary("fundprocessed"); err != nil {
 		return err
 	}
+
+	issuerAcc, _ := reqAccount(issuerAddress)
 
 	for id, address := range openFunds {
 		acc, err := reqAccount(address)
@@ -106,7 +112,8 @@ func processNewFunds() (err error) {
 				return err
 			}
 
-			fund(address, status.Amount)
+			fund(issuerAcc, address, status.Amount)
+			issuerAcc.TxCnt++
 			setStatus(id, "processed")
 			delete(openFunds, id)
 		}
@@ -213,7 +220,7 @@ func setStatus(id int, status string) error {
 }
 
 func create(address [64]byte) {
-	out, err := exec.Command("bazo-client", "accTx", "0", "1", root, hex.EncodeToString(address[:])).Output()
+	out, err := exec.Command("bazo-client", "accTx", "0", "1", issuer, hex.EncodeToString(address[:])).Output()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -221,12 +228,8 @@ func create(address [64]byte) {
 	logger.Printf("%s", out)
 }
 
-func fund(address [64]byte, amount int) {
-	pubKeyRoot, _, _ := storage.ExtractKeyFromFile(os.Args[1])
-	issuer := storage.GetAddressFromPubKey(&pubKeyRoot)
-	acc, _ := reqAccount(issuer)
-
-	out, err := exec.Command("bazo-client", "fundsTx", "0", strconv.Itoa(amount), "1", strconv.Itoa(int(acc.TxCnt)), root, hex.EncodeToString(address[:]), multisig).Output()
+func fund(issuerAcc *client.Account, address [64]byte, amount int) {
+	out, err := exec.Command("bazo-client", "fundsTx", "0", strconv.Itoa(amount), "1", strconv.Itoa(int(issuerAcc.TxCnt)), issuer, hex.EncodeToString(address[:]), multisig).Output()
 	if err != nil {
 		log.Fatal(err)
 	}
