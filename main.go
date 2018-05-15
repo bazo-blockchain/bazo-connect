@@ -136,7 +136,7 @@ func reqCarmaSummary(status string) (err error) {
 
 	if summary.Status == "OK" {
 		for _, o := range responses {
-			if o.Status == status && len(o.Public_key) == 128 {
+			if o.Status == status && len(o.Public_key) == 128 && o.Amount > 0 {
 				var pubKey [64]byte
 				pubKeyInt, _ := new(big.Int).SetString(o.Public_key, 16)
 				copy(pubKey[:], pubKeyInt.Bytes())
