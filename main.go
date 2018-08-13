@@ -29,7 +29,7 @@ var (
 )
 
 const (
-	//CLIENT = "oysyconnect.westeurope.cloudapp.azure.com"
+	CLIENT = "oysyconnect.westeurope.cloudapp.azure.com"
 	CARMAAPPID = "a63c1f72-8198-4a59-85be-67a96f87ab41"
 	CARMAPOC   = "https://carma-poc.autoidlabs.ch/"
 )
@@ -165,7 +165,7 @@ func reqCarmaSummary(status string) (err error) {
 }
 
 func reqAccount(address [64]byte) (acc *client.Account, err error) {
-	response, err := http.Get("http://" + CLIENT + "/account/" + hex.EncodeToString(address[:]))
+	response, err := http.Get("https://" + CLIENT + "/account/" + hex.EncodeToString(address[:]))
 	if err != nil {
 		return nil, errors.New(fmt.Sprintf("The HTTP request failed with error %s", err))
 	}
